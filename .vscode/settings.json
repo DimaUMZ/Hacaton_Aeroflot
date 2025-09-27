@@ -1,0 +1,11 @@
+{
+    "python.defaultInterpreterPath": "/data/vscode/HacatonAeroflot/Aeroflot-project/.venv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.autoComplete.extraPaths": [
+        "/data/vscode/HacatonAeroflot/Aeroflot-project/src"
+    ],
+    "terminal.integrated.shellArgs.linux": [
+        "-c",
+        "source /data/vscode/HacatonAeroflot/Aeroflot-project/.venv/bin/activate && bash"
+    ]
+}

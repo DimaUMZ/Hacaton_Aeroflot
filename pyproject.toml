@@ -1,0 +1,86 @@
+[project]
+name = "aeroflot-project"
+version = "0.1.0"
+description = "Aeroflot инструменты detection project"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Дмитрий", email = "dickpick@yandex.com"},
+    {name = "Настя", email = "dickpick2@yandex.com"},
+]
+keywords = ["aeroflot", "yolo", "computer-vision", "tool-detection"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "ultralytics>=8.0.0",
+    "opencv-python-headless>=4.8.0",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+    "scikit-learn>=1.3.0",
+    "pyyaml>=6.0",
+    "requests>=2.25.0",
+    "click>=8.0.0",
+    "pandas>=2.3.2",
+    "sqlalchemy>=2.0.43",
+    "pydantic>=2.11.9",
+    "fastapi>=0.117.1",
+    "unicorn>=2.1.4",
+    "uvicorn>=0.37.0",
+    "psycopg2-binary>=2.9.10",
+    "python-jose[cryptography]>=3.5.0",
+    "passlib[bcrypt]>=1.7.4",
+    "python-multipart>=0.0.20",
+    "opencv-python>=4.12.0.88",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0", 
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "jupyter>=1.0.0",
+    "ipykernel>=6.0.0",
+]
+train = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
+
+[project.scripts]
+aeroflot-project = "aeroflot_project.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# УДАЛИТЬ секции [tool.uv] и [tool.uv.scripts] - они не поддерживаются
+
+# Оставить только конфигурации инструментов
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = [".venv", "build", "dist"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

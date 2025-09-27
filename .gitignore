@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+pip-log.txt
+.DS_Store
+.ipynb_checkpoints/
+*.egg-info/
+.DS_Store
+datasets/raw/
+yolo_dataset/

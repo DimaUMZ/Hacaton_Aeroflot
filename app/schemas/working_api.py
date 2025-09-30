@@ -13,6 +13,8 @@ from contextlib import asynccontextmanager
 import hashlib
 import uvicorn
 import uuid
+import logging
+import os
 
 # ===== КОНФИГУРАЦИЯ =====
 SECRET_KEY = "your-secret-key-change-in-production"
@@ -20,7 +22,37 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 DATABASE_URL = "sqlite:///./tools.db"
 
+# Коды ошибок
+ERROR_CODES = {
+    "ML_SERVICE_UNAVAILABLE": {
+        "code": "API_ERR_001",
+        "message": "ML сервис недоступен. Проверьте запуск сервиса компьютерного зрения."
+    },
+    "IMAGE_PROCESSING_ERROR": {
+        "code": "API_ERR_002", 
+        "message": "Ошибка обработки изображения. Проверьте корректность данных изображения."
+    },
+    "DETECTION_SERVICE_ERROR": {
+        "code": "API_ERR_003",
+        "message": "Ошибка сервиса распознавания. Не удалось выполнить детекцию инструментов."
+    },
+    "OPERATION_NOT_FOUND": {
+        "code": "API_ERR_004",
+        "message": "Операция не найдена. Проверьте корректность session_id."
+    },
+    "INVALID_IMAGE_DATA": {
+        "code": "API_ERR_005",
+        "message": "Неверные данные изображения. Изображение отсутствует или имеет неверный формат."
+    },
+    "DATABASE_ERROR": {
+        "code": "API_ERR_006",
+        "message": "Ошибка базы данных. Не удалось выполнить операцию с базой данных."
+    }
+}
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ===== БАЗА ДАННЫХ =====
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -46,7 +78,19 @@ class Operation(Base):
     session_id = Column(String)
     engineer_name = Column(String)
 
-# ===== ПРОСТОЕ ХЕШИРОВАНИЕ (без bcrypt) =====
+# ===== ML СЕРВИС =====
+try:
+    from ml_service import detection_service
+    ML_AVAILABLE = detection_service is not None
+    print("✅ ML сервис доступен")
+except ImportError as e:
+    print(f"⚠️ ML сервис недоступен: {e}")
+    ML_AVAILABLE = False
+except Exception as e:
+    print(f"⚠️ Ошибка загрузки ML сервиса: {e}")
+    ML_AVAILABLE = False
+
+# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 def hash_password(password: str) -> str:
     """Простое хеширование пароля для демо"""
     return hashlib.sha256(f"{password}{SECRET_KEY}".encode()).hexdigest()
@@ -55,15 +99,21 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Проверка пароля"""
     return hash_password(plain_password) == hashed_password
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 def create_demo_data():
     """Создает демо-данные при первом запуске"""
     db = SessionLocal()
     try:
-        # Проверяем, есть ли уже пользователи
         if not db.query(User).first():
             demo_user = User(
                 badge_id="demo",
-                full_name="Демо Пользователь",
+                full_name="Иванов Иван Иванович",
                 hashed_password=hash_password("password"),
                 is_active=True,
                 is_superuser=False
@@ -114,26 +164,10 @@ class Token(BaseModel):
     token_type: str
     user: UserResponse
 
-class OperationStartRequest(BaseModel):
-    engineer_name: str
-    operation_type: str
-    operation_date: str
-    user_id: int
-
-class OperationConfirmRequest(BaseModel):
-    session_id: str
-    operation_date: str
-    tools: List[Dict[str, Any]]
-
-# ===== АУТЕНТИФИКАЦИЯ =====
-security = HTTPBearer()
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+class ErrorResponse(BaseModel):
+    error_code: str
+    error_message: str
+    details: Optional[str] = None
 
 # ===== FASTAPI ПРИЛОЖЕНИЕ =====
 app = FastAPI(
@@ -150,6 +184,86 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def read_root():
+    return {
+        "message": "Tool Management System API", 
+        "version": "1.0.0",
+        "ml_available": ML_AVAILABLE
+    }
+
+@app.get("/api/health")
+async def health_check():
+    return {
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "service": "Tool Management System API",
+        "ml_available": ML_AVAILABLE
+    }
+
+@app.get("/api/ml/status")
+async def get_ml_status():
+    """Проверка статуса ML сервиса"""
+    if ML_AVAILABLE:
+        return {
+            "ml_available": True,
+            "available_tools": detection_service.get_available_tools(),
+            "message": "ML сервис готов к работе"
+        }
+    else:
+        return {
+            "ml_available": False,
+            "available_tools": [],
+            "message": "ML сервис недоступен"
+        }
+
+@app.post("/api/ml/detect")
+async def detect_tools(request: dict):
+    """Обнаружение инструментов на изображении с помощью ML модели"""
+    if not ML_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=ErrorResponse(
+                error_code=ERROR_CODES["ML_SERVICE_UNAVAILABLE"]["code"],
+                error_message=ERROR_CODES["ML_SERVICE_UNAVAILABLE"]["message"],
+                details="ML сервис не запущен или недоступен"
+            ).dict()
+        )
+    
+    try:
+        image_base64 = request.get("image_base64", "")
+        confidence_threshold = request.get("confidence_threshold", 0.5)
+        
+        if not image_base64:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ErrorResponse(
+                    error_code=ERROR_CODES["INVALID_IMAGE_DATA"]["code"],
+                    error_message=ERROR_CODES["INVALID_IMAGE_DATA"]["message"],
+                    details="Поле image_base64 не может быть пустым"
+                ).dict()
+            )
+        
+        # Выполняем детекцию
+        results = detection_service.detect_tools(image_base64, confidence_threshold)
+        
+        return {
+            "success": True,
+            "results": results,
+            "available_tools": detection_service.get_available_tools()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in tool detection: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ErrorResponse(
+                error_code=ERROR_CODES["DETECTION_SERVICE_ERROR"]["code"],
+                error_message=ERROR_CODES["DETECTION_SERVICE_ERROR"]["message"],
+                details=f"Ошибка при обработке изображения: {str(e)}"
+            ).dict()
+        )
+
 @app.post("/api/auth/login", response_model=Token)
 async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     """Аутентификация пользователя"""
@@ -161,7 +275,7 @@ async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         # Автоматически создаем пользователя для демо
         if login_data.badge_id in ["demo", "admin"]:
             is_superuser = login_data.badge_id == "admin"
-            full_name = "Демо Пользователь" if not is_superuser else "Администратор Системы"
+            full_name = "Иванов Иван Иванович" if not is_superuser else "Администратор Системы"
             
             user = User(
                 badge_id=login_data.badge_id,
@@ -208,218 +322,184 @@ async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
         "user": UserResponse.from_orm(user)
     }
 
+@app.get("/api/auth/me")
+async def get_current_user(token: str = Depends(HTTPBearer())):
+    """Получение информации о текущем пользователе"""
+    try:
+        payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        badge_id = payload.get("sub")
+        
+        db = SessionLocal()
+        user = db.query(User).filter(User.badge_id == badge_id).first()
+        db.close()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return UserResponse.from_orm(user)
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
 @app.post("/api/operations/start")
-async def start_operation(operation_data: OperationStartRequest, db: Session = Depends(get_db)):
+async def start_operation(operation_data: dict, db: Session = Depends(get_db)):
     """Начало новой операции с инструментами"""
-    print(f"🔧 Starting operation for engineer: {operation_data.engineer_name}")
-    
-    session_id = str(uuid.uuid4())
-    
-    operation = Operation(
-        user_id=operation_data.user_id,
-        operation_type=operation_data.operation_type,
-        session_id=session_id,
-        engineer_name=operation_data.engineer_name,
-        status="in_progress"
-    )
-    
-    db.add(operation)
-    db.commit()
-    db.refresh(operation)
-    
-    print(f"✅ Operation started: {session_id}")
-    
-    return {
-        "session_id": session_id,
-        "operation_id": operation.id,
-        "message": "Operation started successfully"
-    }
-
-@app.post("/api/operations/confirm")
-async def confirm_operation(confirm_data: OperationConfirmRequest, db: Session = Depends(get_db)):
-    """Подтверждение завершения операции"""
-    print(f"✅ Confirming operation: {confirm_data.session_id}")
-    
-    operation = db.query(Operation).filter(Operation.session_id == confirm_data.session_id).first()
-    
-    if not operation:
-        print(f"❌ Operation not found: {confirm_data.session_id}")
-        raise HTTPException(status_code=404, detail="Operation not found")
-    
-    # Обновляем статус операции
-    operation.status = "completed"
-    db.commit()
-    
-    # Демо-данные инструментов
-    demoTools = [
-        {"id": 1, "class_name": "Молоток", "confidence": 95.5, "detected_quantity": 1},
-        {"id": 2, "class_name": "Отвертка крестовая", "confidence": 87.3, "detected_quantity": 2},
-        {"id": 3, "class_name": "Гаечный ключ", "confidence": 92.1, "detected_quantity": 3},
-        {"id": 4, "class_name": "Плоскогубцы", "confidence": 78.9, "detected_quantity": 1}
-    ]
-    
-    print(f"✅ Operation confirmed: {operation.id}")
-    
-    return {
-        "message": "Operation confirmed successfully",
-        "operation_id": operation.id,
-        "tools": demoTools,
-        "total_tools": len(demoTools),
-        "match_percentage": 95.0
-    }
-
-@app.get("/api/users")
-async def get_users(db: Session = Depends(get_db)):
-    """Получить список пользователей (для тестирования)"""
-    users = db.query(User).all()
-    return [UserResponse.from_orm(user) for user in users]
-
-@app.get("/api/health")
-async def health_check():
-    """Проверка здоровья API"""
-    return {
-        "status": "healthy", 
-        "timestamp": datetime.now().isoformat(),
-        "service": "Tool Management System API"
-    }
-
-@app.get("/")
-async def read_root():
-    """Корневой endpoint"""
-    return {
-        "message": "Tool Management System API", 
-        "version": "1.0.0",
-        "endpoints": {
-            "login": "POST /api/auth/login",
-            "start_operation": "POST /api/operations/start", 
-            "confirm_operation": "POST /api/operations/confirm",
-            "health": "GET /api/health",
-            "docs": "GET /docs"
-        }
-    }
-
-if __name__ == "__main__":
-    print("🚀 Starting Tool Management System API")
-    print("📍 URL: http://localhost:8000")
-    print("📚 Documentation: http://localhost:8000/docs")
-    print("🔧 Health Check: http://localhost:8000/api/health")
-    print("=" * 50)
-    
-    uvicorn.run(
-        "working_api:app",
-        host="0.0.0.0", 
-        port=8000,
-        reload=False
-    )
-
-
-# ===== RABOTAY S MODELY =====
-
-try:
-    from ml_service import detection_service
-    ML_AVAILABLE = detection_service is not None
-except ImportError:
-    ML_AVAILABLE = False
-    print("⚠️ ML service not available")
-
-# Добавьте новый endpoint для детекции инструментов
-@app.post("/api/ml/detect")
-async def detect_tools(request: dict):
-    """
-    Обнаружение инструментов на изображении с помощью ML модели
-    """
-    if not ML_AVAILABLE:
-        raise HTTPException(
-            status_code=503, 
-            detail="ML service is not available"
-        )
+    print(f"🔧 Starting operation for engineer: {operation_data.get('engineer_name')}")
     
     try:
-        image_base64 = request.get("image_base64", "")
-        confidence_threshold = request.get("confidence_threshold", 0.5)
+        session_id = str(uuid.uuid4())
         
-        if not image_base64:
-            raise HTTPException(
-                status_code=400, 
-                detail="Image data is required"
-            )
+        operation = Operation(
+            user_id=operation_data.get('user_id', 1),
+            operation_type=operation_data.get('operation_type', 'checkout'),
+            session_id=session_id,
+            engineer_name=operation_data.get('engineer_name', ''),
+            status="in_progress"
+        )
         
-        # Выполняем детекцию
-        results = detection_service.detect_tools(image_base64, confidence_threshold)
+        db.add(operation)
+        db.commit()
+        db.refresh(operation)
+        
+        print(f"✅ Operation started: {session_id}")
         
         return {
-            "success": True,
-            "results": results,
-            "available_tools": detection_service.get_available_tools()
+            "session_id": session_id,
+            "operation_id": operation.id,
+            "message": "Operation started successfully"
         }
-        
     except Exception as e:
-        logger.error(f"Error in tool detection: {e}")
+        logger.error(f"Database error in start_operation: {e}")
         raise HTTPException(
-            status_code=500, 
-            detail=f"Detection failed: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ErrorResponse(
+                error_code=ERROR_CODES["DATABASE_ERROR"]["code"],
+                error_message=ERROR_CODES["DATABASE_ERROR"]["message"],
+                details=f"Не удалось создать операцию: {str(e)}"
+            ).dict()
         )
 
-@app.get("/api/ml/status")
-async def get_ml_status():
-    """
-    Проверка статуса ML сервиса
-    """
-    return {
-        "ml_available": ML_AVAILABLE,
-        "available_tools": detection_service.get_available_tools() if ML_AVAILABLE else []
-    }
-
-# Обновите endpoint подтверждения операции для использования ML
 @app.post("/api/operations/confirm")
 async def confirm_operation(confirm_data: dict, db: Session = Depends(get_db)):
     """Подтверждение завершения операции с возможностью ML детекции"""
     print(f"✅ Confirming operation: {confirm_data.get('session_id')}")
     
-    operation = db.query(Operation).filter(
-        Operation.session_id == confirm_data.get("session_id")
-    ).first()
-    
-    if not operation:
-        raise HTTPException(status_code=404, detail="Operation not found")
-    
-    # Если предоставлено изображение, используем ML для детекции
-    image_base64 = confirm_data.get("image_base64")
-    if image_base64 and ML_AVAILABLE:
-        try:
-            ml_results = detection_service.detect_tools(image_base64)
-            if ml_results["success"]:
-                # Используем результаты ML
-                tools_data = ml_results["results"]["detected_tools"]
-                print(f"🔍 ML detected {len(tools_data)} tools")
+    try:
+        operation = db.query(Operation).filter(
+            Operation.session_id == confirm_data.get("session_id")
+        ).first()
+        
+        if not operation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ErrorResponse(
+                    error_code=ERROR_CODES["OPERATION_NOT_FOUND"]["code"],
+                    error_message=ERROR_CODES["OPERATION_NOT_FOUND"]["message"],
+                    details=f"Операция с session_id {confirm_data.get('session_id')} не найдена"
+                ).dict()
+            )
+        
+        # Если предоставлено изображение, используем ML для детекции
+        image_base64 = confirm_data.get("image_base64")
+        ml_used = False
+        tools_data = []
+        
+        if image_base64:
+            if ML_AVAILABLE:
+                try:
+                    ml_results = detection_service.detect_tools(image_base64)
+                    if ml_results["success"]:
+                        # Используем результаты ML
+                        tools_data = ml_results["results"]["detected_tools"]
+                        ml_used = True
+                        print(f"🔍 ML detected {len(tools_data)} tools")
+                    else:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=ErrorResponse(
+                                error_code=ERROR_CODES["DETECTION_SERVICE_ERROR"]["code"],
+                                error_message=ERROR_CODES["DETECTION_SERVICE_ERROR"]["message"],
+                                details="ML сервис вернул ошибку при детекции"
+                            ).dict()
+                        )
+                except Exception as e:
+                    logger.error(f"ML detection failed: {e}")
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=ErrorResponse(
+                            error_code=ERROR_CODES["DETECTION_SERVICE_ERROR"]["code"],
+                            error_message=ERROR_CODES["DETECTION_SERVICE_ERROR"]["message"],
+                            details=f"Ошибка ML детекции: {str(e)}"
+                        ).dict()
+                    )
             else:
-                # Fallback к демо-данным
-                tools_data = get_demo_tools()
-        except Exception as e:
-            print(f"⚠️ ML detection failed, using demo data: {e}")
-            tools_data = get_demo_tools()
-    else:
-        # Используем демо-данные
-        tools_data = get_demo_tools()
-    
-    # Обновляем статус операции
-    operation.status = "completed"
-    db.commit()
-    
-    return {
-        "message": "Operation confirmed successfully",
-        "operation_id": operation.id,
-        "tools": tools_data,
-        "total_tools": len(tools_data),
-        "match_percentage": 95.0,
-        "ml_used": image_base64 is not None and ML_AVAILABLE
-    }
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=ErrorResponse(
+                        error_code=ERROR_CODES["ML_SERVICE_UNAVAILABLE"]["code"],
+                        error_message=ERROR_CODES["ML_SERVICE_UNAVAILABLE"]["message"],
+                        details="Необходимо изображение для детекции, но ML сервис недоступен"
+                    ).dict()
+                )
+        else:
+            # Если изображение не предоставлено, возвращаем пустой список инструментов
+            tools_data = []
+            print("ℹ️ No image provided for detection")
+        
+        # Обновляем статус операции
+        operation.status = "completed"
+        db.commit()
+        
+        return {
+            "message": "Operation confirmed successfully",
+            "operation_id": operation.id,
+            "tools": tools_data,
+            "total_tools": len(tools_data),
+            "match_percentage": 95.0 if tools_data else 0,
+            "ml_used": ml_used
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Database error in confirm_operation: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ErrorResponse(
+                error_code=ERROR_CODES["DATABASE_ERROR"]["code"],
+                error_message=ERROR_CODES["DATABASE_ERROR"]["message"],
+                details=f"Ошибка при подтверждении операции: {str(e)}"
+            ).dict()
+        )
 
-def get_demo_tools():
-    """Возвращает демо-данные инструментов"""
-    return [
-        {"id": 1, "class_name": "Молоток", "confidence": 95.5, "detected_quantity": 1},
-        {"id": 2, "class_name": "Отвертка крестовая", "confidence": 87.3, "detected_quantity": 2},
-        {"id": 3, "class_name": "Гаечный ключ", "confidence": 92.1, "detected_quantity": 3},
-        {"id": 4, "class_name": "Плоскогубцы", "confidence": 78.9, "detected_quantity": 1}
-    ]
+@app.get("/api/users")
+async def get_users(db: Session = Depends(get_db)):
+    """Получить список пользователей (для тестирования)"""
+    try:
+        users = db.query(User).all()
+        return [UserResponse.from_orm(user) for user in users]
+    except Exception as e:
+        logger.error(f"Database error in get_users: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ErrorResponse(
+                error_code=ERROR_CODES["DATABASE_ERROR"]["code"],
+                error_message=ERROR_CODES["DATABASE_ERROR"]["message"],
+                details=f"Ошибка при получении списка пользователей: {str(e)}"
+            ).dict()
+        )
+
+if __name__ == "__main__":
+    print("🚀 Starting Tool Management System API")
+    print("📍 URL: http://localhost:8001")
+    print("📚 Documentation: http://localhost:8001/docs")
+    print("🔧 Health Check: http://localhost:8001/api/health")
+    print(f"🤖 ML Service: {'✅ Available' if ML_AVAILABLE else '❌ Not available'}")
+    print("=" * 50)
+    
+    uvicorn.run(
+        app,
+        host="0.0.0.0", 
+        port=8001,
+        reload=False
+    )

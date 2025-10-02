@@ -1,8 +1,11 @@
 import os
 import shutil
+import argparse
+import yaml
+from typing import List
 from sklearn.model_selection import train_test_split
 
-def prepare_yolo_structure(dataset_path, output_path='yolo_dataset'):
+def prepare_yolo_structure(dataset_path: str, output_path: str = 'yolo_dataset', val_ratio: float = 0.2, copy: bool = True) -> List[str]:
     # Получаем все папки
     all_folders = sorted([d for d in os.listdir(dataset_path) 
                          if os.path.isdir(os.path.join(dataset_path, d))])
@@ -36,20 +39,35 @@ def prepare_yolo_structure(dataset_path, output_path='yolo_dataset'):
     print(f"Папки с линейкой: {len(ruler_folders)}")
     
     # Сохраняем классы инструментов
-    with open(os.path.join(output_path, 'classes.txt'), 'w') as f:
+    classes_txt_path = os.path.join(output_path, 'classes.txt')
+    with open(classes_txt_path, 'w') as f:
         for i, class_name in enumerate(tools_folders):
             f.write(f"{class_name}\n")
     
     # Обрабатываем отдельные инструменты
-    process_single_tools(dataset_path, output_path, tools_folders)
+    process_single_tools(dataset_path, output_path, tools_folders, val_ratio=val_ratio, copy=copy)
     
     # Обрабатываем групповые фото (требуют специальной аннотации)
-    process_group_photos(dataset_path, output_path, group_folders)
+    process_group_photos(dataset_path, output_path, group_folders, copy=copy)
     
     # Обрабатываем фото с линейкой (как отдельные инструменты)
-    process_ruler_photos(dataset_path, output_path, ruler_folders)
+    process_ruler_photos(dataset_path, output_path, ruler_folders, copy=copy)
 
-def process_single_tools(dataset_path, output_path, classes):
+    # Write YOLO data.yaml
+    data_yaml = {
+        'path': os.path.abspath(output_path),
+        'train': 'images/train',
+        'val': 'images/val',
+        'names': {i: name for i, name in enumerate(tools_folders)}
+    }
+    with open(os.path.join(output_path, 'data.yaml'), 'w', encoding='utf-8') as yf:
+        yaml.safe_dump(data_yaml, yf, allow_unicode=True, sort_keys=False)
+
+    print(f"\n✅ Wrote classes to: {classes_txt_path}")
+    print(f"✅ Wrote YOLO data.yaml to: {os.path.join(output_path, 'data.yaml')}")
+    return tools_folders
+
+def process_single_tools(dataset_path: str, output_path: str, classes: List[str], val_ratio: float = 0.2, copy: bool = True):
     """Обрабатывает папки с отдельными инструментами"""
     print("\n=== Обработка отдельных инструментов ===")
     
@@ -74,7 +92,7 @@ def process_single_tools(dataset_path, output_path, classes):
             train_imgs = images
             val_imgs = []
         else:
-            train_imgs, val_imgs = train_test_split(images, test_size=0.2, random_state=42)
+            train_imgs, val_imgs = train_test_split(images, test_size=val_ratio, random_state=42)
         
         print(f"  Train: {len(train_imgs)}, Val: {len(val_imgs)}")
         
@@ -82,10 +100,14 @@ def process_single_tools(dataset_path, output_path, classes):
         for split, img_list in [('train', train_imgs), ('val', val_imgs)]:
             for img_name in img_list:
                 try:
-                    # Копируем изображение
+                    # Копируем или линкуем изображение
                     src_img = os.path.join(class_path, img_name)
                     dst_img = os.path.join(output_path, 'images', split, img_name)
-                    shutil.copy2(src_img, dst_img)
+                    if copy:
+                        shutil.copy2(src_img, dst_img)
+                    else:
+                        if not os.path.exists(dst_img):
+                            os.symlink(src_img, dst_img)
                     
                     # Создаем YOLO аннотацию (объект занимает все изображение)
                     txt_name = os.path.splitext(img_name)[0] + '.txt'
@@ -95,7 +117,7 @@ def process_single_tools(dataset_path, output_path, classes):
                 except Exception as e:
                     print(f"Ошибка при обработке {img_name}: {e}")
 
-def process_group_photos(dataset_path, output_path, group_folders):
+def process_group_photos(dataset_path: str, output_path: str, group_folders: List[str], copy: bool = True):
     """Обрабатывает групповые фотографии"""
     print("\n=== Обработка групповых фото ===")
     
@@ -114,10 +136,14 @@ def process_group_photos(dataset_path, output_path, group_folders):
         # (требуют ручной аннотации bounding boxes)
         for img_name in images:
             try:
-                # Копируем изображение в train
+                # Копируем или линкуем изображение в train
                 src_img = os.path.join(group_path, img_name)
                 dst_img = os.path.join(output_path, 'images', 'train', img_name)
-                shutil.copy2(src_img, dst_img)
+                if copy:
+                    shutil.copy2(src_img, dst_img)
+                else:
+                    if not os.path.exists(dst_img):
+                        os.symlink(src_img, dst_img)
                 
                 # Проверяем есть ли аннотация
                 txt_name = os.path.splitext(img_name)[0] + '.txt'
@@ -139,7 +165,7 @@ def process_group_photos(dataset_path, output_path, group_folders):
             except Exception as e:
                 print(f"Ошибка при обработке группового фото {img_name}: {e}")
 
-def process_ruler_photos(dataset_path, output_path, ruler_folders):
+def process_ruler_photos(dataset_path: str, output_path: str, ruler_folders: List[str], copy: bool = True):
     """Обрабатывает фотографии с линейкой"""
     print("\n=== Обработка фото с линейкой ===")
     
@@ -169,10 +195,14 @@ def process_ruler_photos(dataset_path, output_path, ruler_folders):
                     tool_class_idx = 0
                     print(f"  Предупреждение: не удалось определить класс для {img_name}, используется класс 0")
                 
-                # Копируем изображение в train
+                # Копируем или линкуем изображение в train
                 src_img = os.path.join(ruler_path, img_name)
                 dst_img = os.path.join(output_path, 'images', 'train', img_name)
-                shutil.copy2(src_img, dst_img)
+                if copy:
+                    shutil.copy2(src_img, dst_img)
+                else:
+                    if not os.path.exists(dst_img):
+                        os.symlink(src_img, dst_img)
                 
                 # Создаем аннотацию (инструмент занимает часть изображения)
                 txt_name = os.path.splitext(img_name)[0] + '.txt'
@@ -187,13 +217,20 @@ def process_ruler_photos(dataset_path, output_path, ruler_folders):
                 print(f"Ошибка при обработке фото с линейкой {img_name}: {e}")
 
 if __name__ == "__main__":
-    dataset_path = '/data/vscode/HacatonAeroflot/Aeroflot-project/datasets/raw' #ЗАМЕНИТЬ НА ОТНОСИТЕЛЬНЫЙ ПУТЬ ПОТОМ
-    output_path = '/data/vscode/HacatonAeroflot/Aeroflot-project/yolo_dataset'
+    parser = argparse.ArgumentParser(description='Prepare YOLO dataset structure from raw folders')
+    parser.add_argument('--dataset-path', type=str, default='datasets/raw', help='Path to raw dataset root')
+    parser.add_argument('--output-path', type=str, default='yolo_dataset', help='Output YOLO dataset directory')
+    parser.add_argument('--val-ratio', type=float, default=0.2, help='Validation split ratio for single tools')
+    parser.add_argument('--no-copy', action='store_true', help='Use symlinks instead of copying files')
+    args = parser.parse_args()
+
+    dataset_path = args.dataset_path
+    output_path = args.output_path
     
     # Проверяем существование пути
     if not os.path.exists(dataset_path):
         print(f"Ошибка: путь {dataset_path} не существует!")
         exit(1)
     
-    prepare_yolo_structure(dataset_path, output_path)
+    prepare_yolo_structure(dataset_path, output_path, val_ratio=args.val_ratio, copy=(not args.no_copy))
     print("\n=== Подготовка данных завершена ===")

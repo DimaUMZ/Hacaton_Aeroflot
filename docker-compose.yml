@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tools
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: .
+      dockerfile: ./docker/backend.Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/tools
+      MODEL_PATH: /app/models/best_tools_detection.pt
+      ML_SERVICE_URL: http://ml:8010
+    volumes:
+      - ./src/aeroflot_project/models/best_tools_detection.pt:/app/models/best_tools_detection.pt:ro
+    depends_on:
+      - db
+      - ml
+    ports:
+      - "8001:8001"
+    command: bash -lc "until nc -z db 5432; do echo waiting for db; sleep 1; done; alembic upgrade head && uvicorn app.schemas.working_api:app --host 0.0.0.0 --port 8001"
+
+  frontend:
+    build:
+      context: ./app/warehouse-frontend
+      dockerfile: ../../docker/frontend.Dockerfile
+    environment:
+      - REACT_APP_API_BASE=http://localhost:8001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+  ml:
+    build:
+      context: .
+      dockerfile: ./docker/ml.Dockerfile
+    ports:
+      - "8010:8010"
+
+volumes:
+  db_data:
+
+

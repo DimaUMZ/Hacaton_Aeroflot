@@ -12,3 +12,4 @@ pip-log.txt
 .DS_Store
 datasets/raw/
 yolo_dataset/
+pseudo_labeled/

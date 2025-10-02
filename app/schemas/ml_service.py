@@ -5,6 +5,7 @@ from ultralytics import YOLO
 import base64
 from typing import List, Dict, Any
 import logging
+import os
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -161,8 +162,11 @@ class ToolDetectionService:
         return list(self.tool_classes.values())
 
 # Создаем глобальный экземпляр сервиса
-# Укажите правильный путь к вашей модели
-MODEL_PATH = "/data/vscode/HacatonAeroflot/Aeroflot-project/src/aeroflot_project/models/best_tools_detection.pt"
+# Путь к модели можно задать через переменную окружения MODEL_PATH
+MODEL_PATH = os.getenv(
+    "MODEL_PATH",
+    "/data/vscode/HacatonAeroflot/Aeroflot-project/src/aeroflot_project/models/best_tools_detection.pt"
+)
 
 try:
     detection_service = ToolDetectionService(MODEL_PATH)

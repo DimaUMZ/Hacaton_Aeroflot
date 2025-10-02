@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import './App.css';
 
-const API_BASE_URL = 'http://localhost:8001/api';
+const API_BASE_URL = process.env.REACT_APP_API_BASE ? `${process.env.REACT_APP_API_BASE}/api` : 'http://localhost:8001/api';
 
 // Объект с описаниями ошибок
 const ERROR_CODES = {
@@ -223,6 +223,9 @@ function MainView({ user, onLogout, showError }) {
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const [uploadedImage, setUploadedImage] = useState(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const [isCameraOn, setIsCameraOn] = useState(false);
   const [detectionResult, setDetectionResult] = useState(null);
 
   // Устанавливаем текущую дату по умолчанию
@@ -343,6 +346,45 @@ function MainView({ user, onLogout, showError }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Работа с камерой
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        setIsCameraOn(true);
+      }
+    } catch (e) {
+      console.error('Camera error:', e);
+      showError(ERROR_CODES.CAMERA_ERROR);
+    }
+  };
+
+  const stopCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = videoRef.current.srcObject.getTracks();
+      tracks.forEach(t => t.stop());
+      videoRef.current.srcObject = null;
+      setIsCameraOn(false);
+    }
+  };
+
+  const capturePhoto = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL('image/jpeg');
+    const base64Data = dataUrl.split(',')[1];
+    setUploadedImage({ base64: base64Data, preview: dataUrl, width: canvas.width, height: canvas.height });
+    setDetectionResult(null);
   };
 
   // Функция очистки изображения
@@ -527,6 +569,21 @@ function MainView({ user, onLogout, showError }) {
           <h3>Работа с изображениями</h3>
           
           <div className="image-controls">
+            <div className="camera-area">
+              <div className="camera-controls">
+                {!isCameraOn ? (
+                  <button onClick={startCamera} disabled={loading || !sessionId} className="camera-button">🎥 Включить камеру</button>
+                ) : (
+                  <button onClick={stopCamera} disabled={loading} className="camera-button stop">🛑 Выключить камеру</button>
+                )}
+                <button onClick={capturePhoto} disabled={!isCameraOn || loading} className="capture-button">📸 Снимок</button>
+              </div>
+              <div className="camera-preview">
+                <video ref={videoRef} style={{ width: '100%', maxWidth: 480, background: '#000' }} muted playsInline />
+                <canvas ref={canvasRef} style={{ display: 'none' }} />
+              </div>
+            </div>
+
             <div className="file-upload-area">
               <input
                 id="image-upload"

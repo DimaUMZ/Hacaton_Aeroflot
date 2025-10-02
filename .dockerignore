@@ -1,0 +1,56 @@
+# Локальные датасеты и данные (не нужны в контейнерах)
+src/pseudo_labeled/
+yolo_dataset/
+datasets/
+
+# Системные и IDE файлы
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Локальные зависимости и пакеты
+node_modules/
+
+# Логи и временные файлы
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Разное
+.DS_Store
+Thumbs.db
+.env
+.env.local
+.env.*.local
+
+# Файлы, специфичные для локальной разработки (согласно вашему README)
+tools.db
+start.sh
+labelImg/
+
+# Кэш и артефакты сборки
+.coverage
+.cache/
+.pytest_cache/
+.mypy_cache/

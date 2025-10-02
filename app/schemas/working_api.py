@@ -453,24 +453,22 @@ async def login(login_data: LoginRequest, db: Session = Depends(get_db)):
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": UserResponse.from_orm(user)
+        "user": UserResponse.model_validate(user)
     }
 
 @app.get("/api/auth/me")
-async def get_current_user(token: str = Depends(HTTPBearer())):
+async def get_current_user(token: str = Depends(HTTPBearer()), db: Session = Depends(get_db)):
     """Получение информации о текущем пользователе"""
     try:
         payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         badge_id = payload.get("sub")
         
-        db = SessionLocal()
         user = db.query(User).filter(User.badge_id == badge_id).first()
-        db.close()
         
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
-        return UserResponse.from_orm(user)
+        return UserResponse.model_validate(user)
         
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
@@ -685,7 +683,7 @@ async def get_users(db: Session = Depends(get_db)):
     """Получить список пользователей (для тестирования)"""
     try:
         users = db.query(User).all()
-        return [UserResponse.from_orm(user) for user in users]
+        return [UserResponse.model_validate(user) for user in users]
     except Exception as e:
         logger.error(f"Database error in get_users: {e}")
         raise HTTPException(
